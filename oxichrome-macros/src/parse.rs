@@ -106,6 +106,98 @@ fn validate_host_permission_pattern(pattern: &LitStr) -> syn::Result<()> {
     Ok(())
 }
 
+struct IconMap;
+
+impl Parse for IconMap {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let content;
+        syn::braced!(content in input);
+        while !content.is_empty() {
+            content.parse::<LitStr>()?;
+            content.parse::<Token![=]>()?;
+            content.parse::<LitStr>()?;
+            if !content.is_empty() {
+                content.parse::<Token![,]>()?;
+            }
+        }
+        Ok(Self)
+    }
+}
+
+struct ActionArgs;
+
+impl Parse for ActionArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let content;
+        syn::braced!(content in input);
+        while !content.is_empty() {
+            let key: Ident = content.parse()?;
+            content.parse::<Token![=]>()?;
+            match key.to_string().as_str() {
+                "default_icon" => {
+                    if content.peek(LitStr) {
+                        content.parse::<LitStr>()?;
+                    } else {
+                        content.parse::<IconMap>()?;
+                    }
+                }
+                "default_title" | "default_popup" => {
+                    content.parse::<LitStr>()?;
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!("unknown action argument `{other}`"),
+                    ));
+                }
+            }
+            if !content.is_empty() {
+                content.parse::<Token![,]>()?;
+            }
+        }
+        Ok(Self)
+    }
+}
+
+#[cfg(test)]
+mod extension_icon_tests {
+    use super::*;
+
+    #[test]
+    fn parses_icons_and_action() {
+        syn::parse_str::<ExtensionArgs>(r#"
+            name = "Focus Block Rs", version = "0.1.0", permissions = ["storage"],
+            action = {
+                default_icon = {
+                    "16" = "icon-16.png", "32" = "icon-32.png",
+                    "48" = "icon-48.png", "128" = "icon-128.png",
+                },
+                default_title = "Focus", default_popup = "custom.html",
+            },
+            icons = {
+                "16" = "icon-16.png", "32" = "icon-32.png",
+                "48" = "icon-48.png", "128" = "icon-128.png",
+            },
+        "#).unwrap();
+    }
+
+    #[test]
+    fn parses_single_action_icon() {
+        syn::parse_str::<ExtensionArgs>(r#"
+            name = "Test", version = "1.0.0",
+            action = { default_icon = "icon.png" }
+        "#).unwrap();
+    }
+
+    #[test]
+    fn rejects_unknown_action_field() {
+        let error = syn::parse_str::<ExtensionArgs>(r#"
+            name = "Test", version = "1.0.0", action = { unknown = "value" }
+        "#).unwrap_err();
+        assert!(error.to_string().contains("unknown action argument `unknown`"));
+    }
+}
+
 #[derive(Debug)]
 pub struct ExtensionArgs {
     pub name: LitStr,
@@ -158,6 +250,12 @@ impl Parse for ExtensionArgs {
                             content.parse::<Token![,]>()?;
                         }
                     }
+                }
+                "icons" => {
+                    input.parse::<IconMap>()?;
+                }
+                "action" => {
+                    input.parse::<ActionArgs>()?;
                 }
                 other => {
                     return Err(syn::Error::new(

@@ -1,6 +1,9 @@
 //! Parses Rust source files to extract oxichrome metadata without compiling.
 
+use std::collections::BTreeMap;
 use std::path::Path;
+use serde::Serialize;
+use syn::parse::{Parse, ParseStream};
 use syn::visit::Visit;
 use syn::{Attribute, Expr, ExprLit, ItemFn, ItemStruct, Lit, Meta, MetaNameValue};
 
@@ -11,11 +14,109 @@ pub struct ExtensionMetadata {
     pub description: Option<String>,
     pub permissions: Vec<String>,
     pub host_permissions: Vec<String>,
+    pub icons: BTreeMap<String, String>,
+    pub action: Option<ActionMetadata>,
     pub background_functions: Vec<String>,
     pub event_handlers: Vec<EventHandler>,
     pub has_popup: bool,
     pub has_options_page: bool,
     pub content_scripts: Vec<ContentScript>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ActionMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_popup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_icon: Option<ActionIcon>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum ActionIcon {
+    Path(String),
+    Sizes(BTreeMap<String, String>),
+}
+
+struct IconMap(BTreeMap<String, String>);
+
+impl Parse for IconMap {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let content;
+        syn::braced!(content in input);
+        let mut icons = BTreeMap::new();
+        while !content.is_empty() {
+            let size: syn::LitStr = content.parse()?;
+            content.parse::<syn::Token![=]>()?;
+            let path: syn::LitStr = content.parse()?;
+            icons.insert(size.value(), path.value());
+            if !content.is_empty() {
+                content.parse::<syn::Token![,]>()?;
+            }
+        }
+        Ok(Self(icons))
+    }
+}
+
+impl Parse for ActionMetadata {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let content;
+        syn::braced!(content in input);
+        let mut action = Self::default();
+        while !content.is_empty() {
+            let key: syn::Ident = content.parse()?;
+            content.parse::<syn::Token![=]>()?;
+            match key.to_string().as_str() {
+                "default_icon" => {
+                    action.default_icon = Some(if content.peek(syn::LitStr) {
+                        ActionIcon::Path(content.parse::<syn::LitStr>()?.value())
+                    } else {
+                        ActionIcon::Sizes(content.parse::<IconMap>()?.0)
+                    });
+                }
+                "default_title" => {
+                    action.default_title = Some(content.parse::<syn::LitStr>()?.value());
+                }
+                "default_popup" => {
+                    action.default_popup = Some(content.parse::<syn::LitStr>()?.value());
+                }
+                other => return Err(syn::Error::new(
+                    key.span(), format!("unknown action argument `{other}`"),
+                )),
+            }
+            if !content.is_empty() {
+                content.parse::<syn::Token![,]>()?;
+            }
+        }
+        Ok(action)
+    }
+}
+
+enum ExtensionArgument {
+    Icons(IconMap),
+    Action(ActionMetadata),
+    Meta(Meta),
+}
+
+impl Parse for ExtensionArgument {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ahead = input.fork();
+        let key: syn::Ident = ahead.parse()?;
+        match key.to_string().as_str() {
+            "icons" | "action" => {
+                input.parse::<syn::Ident>()?;
+                input.parse::<syn::Token![=]>()?;
+                if key == "icons" {
+                    Ok(Self::Icons(input.parse()?))
+                } else {
+                    Ok(Self::Action(input.parse()?))
+                }
+            }
+            _ => Ok(Self::Meta(input.parse()?)),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -36,12 +137,14 @@ pub struct ContentScript {
 
 struct MetadataVisitor {
     metadata: ExtensionMetadata,
+    error: Option<syn::Error>,
 }
 
 impl MetadataVisitor {
     fn new() -> Self {
         MetadataVisitor {
             metadata: ExtensionMetadata::default(),
+            error: None,
         }
     }
 
@@ -54,13 +157,28 @@ impl MetadataVisitor {
     }
 
     fn parse_extension_args(&mut self, attr: &Attribute) {
-        let Ok(nested) = attr.parse_args_with(
-            syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
-        ) else {
-            return;
+        let nested = match attr.parse_args_with(
+            syn::punctuated::Punctuated::<ExtensionArgument, syn::Token![,]>::parse_terminated,
+        ) {
+            Ok(nested) => nested,
+            Err(error) => {
+                self.error = Some(error);
+                return;
+            }
         };
 
-        for meta in nested {
+        for argument in nested {
+            let meta = match argument {
+                ExtensionArgument::Icons(icons) => {
+                    self.metadata.icons = icons.0;
+                    continue;
+                }
+                ExtensionArgument::Action(action) => {
+                    self.metadata.action = Some(action);
+                    continue;
+                }
+                ExtensionArgument::Meta(meta) => meta,
+            };
             if let Meta::NameValue(MetaNameValue {
                 path,
                 value: Expr::Lit(ExprLit { lit: Lit::Str(s), .. }),
@@ -243,12 +361,27 @@ pub fn parse_source_str(source: &str) -> anyhow::Result<ExtensionMetadata> {
     let file = syn::parse_file(source)?;
     let mut visitor = MetadataVisitor::new();
     visitor.visit_file(&file);
+    if let Some(error) = visitor.error {
+        return Err(error.into());
+    }
     Ok(visitor.metadata)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_invalid_action_reports_error() {
+        let source = r#"
+            #[oxichrome::extension(
+                name = "Test", version = "1.0.0", action = { unknown = "value" }
+            )]
+            struct Test;
+        "#;
+        let error = parse_source_str(source).unwrap_err();
+        assert!(error.to_string().contains("unknown action argument `unknown`"));
+    }
 
     #[test]
     fn test_parse_extension() {

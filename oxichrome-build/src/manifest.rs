@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::Browser;
-use crate::source_parser::ExtensionMetadata;
+use crate::source_parser::{ActionMetadata, ExtensionMetadata};
 
 #[derive(Serialize)]
 struct Manifest {
@@ -15,7 +15,9 @@ struct Manifest {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     host_permissions: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    action: Option<Action>,
+    action: Option<ActionMetadata>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    icons: std::collections::BTreeMap<String, String>,
     background: BackgroundConfig,
     content_security_policy: ContentSecurityPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -24,11 +26,6 @@ struct Manifest {
     content_scripts: Vec<ContentScriptEntry>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     web_accessible_resources: Vec<WebAccessibleResource>,
-}
-
-#[derive(Serialize)]
-struct Action {
-    default_popup: String,
 }
 
 #[derive(Serialize)]
@@ -84,13 +81,17 @@ pub fn generate_manifest(metadata: &ExtensionMetadata, browser: Browser) -> anyh
         description: metadata.description.clone(),
         permissions: metadata.permissions.clone(),
         host_permissions: metadata.host_permissions.clone(),
-        action: if metadata.has_popup {
-            Some(Action {
-                default_popup: "popup.html".to_string(),
-            })
-        } else {
-            None
+        action: {
+            let mut action = metadata.action.clone();
+            if metadata.has_popup {
+                let action = action.get_or_insert_with(ActionMetadata::default);
+                if action.default_popup.is_none() {
+                    action.default_popup = Some("popup.html".to_string());
+                }
+            }
+            action
         },
+        icons: metadata.icons.clone(),
         background: BackgroundConfig {
             service_worker: "background.js".to_string(),
             worker_type: "module".to_string(),
@@ -153,6 +154,75 @@ pub fn generate_manifest(metadata: &ExtensionMetadata, browser: Browser) -> anyh
 mod tests {
     use super::*;
 
+    #[test]
+    fn test_icons_and_action_from_source() {
+        let source = r#"
+            #[oxichrome::extension(
+                name = "Focus Block Rs",
+                version = "0.1.0",
+                permissions = ["storage"],
+                action = {
+                    default_icon = {
+                        "16" = "icon-16.png", "32" = "icon-32.png",
+                        "48" = "icon-48.png", "128" = "icon-128.png",
+                    },
+                    default_title = "Focus",
+                },
+                icons = {
+                    "16" = "icon-16.png", "32" = "icon-32.png",
+                    "48" = "icon-48.png", "128" = "icon-128.png",
+                },
+            )]
+            struct FocusBlock;
+
+            #[oxichrome::popup]
+            fn Popup() {}
+        "#;
+        let metadata = crate::source_parser::parse_source_str(source).unwrap();
+        for browser in [Browser::Chromium, Browser::Firefox] {
+            let json = generate_manifest(&metadata, browser).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let icons = serde_json::json!({
+                "16": "icon-16.png", "32": "icon-32.png",
+                "48": "icon-48.png", "128": "icon-128.png",
+            });
+            assert_eq!(parsed["icons"], icons);
+            assert_eq!(parsed["action"]["default_icon"], icons);
+            assert_eq!(parsed["action"]["default_popup"], "popup.html");
+            assert_eq!(parsed["action"]["default_title"], "Focus");
+            assert_eq!(parsed["permissions"][0], "storage");
+        }
+    }
+
+    #[test]
+    fn test_action_without_popup_and_explicit_popup() {
+        let source = r#"
+            #[oxichrome::extension(
+                name = "Test", version = "1.0.0",
+                action = { default_icon = "icons/icon.png" }
+            )]
+            struct Test;
+        "#;
+        let mut metadata = crate::source_parser::parse_source_str(source).unwrap();
+        let json = generate_manifest(&metadata, Browser::Chromium).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["action"]["default_icon"], "icons/icon.png");
+        assert!(parsed["action"].get("default_popup").is_none());
+        assert!(parsed.get("icons").is_none());
+
+        metadata.has_popup = true;
+        metadata.action.as_mut().unwrap().default_popup = Some("custom.html".to_string());
+        let json = generate_manifest(&metadata, Browser::Chromium).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["action"]["default_popup"], "custom.html");
+
+        metadata.has_popup = false;
+        metadata.action = None;
+        let json = generate_manifest(&metadata, Browser::Chromium).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed.get("action").is_none());
+    }
+
     fn test_metadata() -> ExtensionMetadata {
         ExtensionMetadata {
             name: Some("Test Extension".to_string()),
@@ -160,6 +230,8 @@ mod tests {
             description: Some("A test extension".to_string()),
             permissions: vec!["storage".to_string(), "tabs".to_string()],
             host_permissions: vec![],
+            icons: Default::default(),
+            action: None,
             background_functions: vec!["start".to_string()],
             event_handlers: vec![],
             has_popup: true,
@@ -194,6 +266,8 @@ mod tests {
             description: None,
             permissions: vec![],
             host_permissions: vec![],
+            icons: Default::default(),
+            action: None,
             background_functions: vec![],
             event_handlers: vec![],
             has_popup: false,
@@ -228,6 +302,8 @@ mod tests {
             description: None,
             permissions: vec![],
             host_permissions: vec![],
+            icons: Default::default(),
+            action: None,
             background_functions: vec![],
             event_handlers: vec![],
             has_popup: false,
@@ -281,6 +357,8 @@ mod tests {
                 "*://developer.mozilla.org/*".to_string(),
                 "*://*.example.org/*".to_string(),
             ],
+            icons: Default::default(),
+            action: None,
             background_functions: vec![],
             event_handlers: vec![],
             has_popup: false,

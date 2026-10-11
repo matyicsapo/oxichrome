@@ -142,6 +142,8 @@ mod tests {
     #[test]
     fn test_background_js_es_module() {
         let metadata = ExtensionMetadata {
+            icons: Default::default(),
+            action: None,
             name: Some("Test".to_string()),
             version: Some("1.0.0".to_string()),
             description: None,
