@@ -58,6 +58,7 @@ pub fn run(release: bool, browser: Browser) -> Result<()> {
     let browser_dir = match browser {
         Browser::Chromium => "chromium",
         Browser::Firefox => "firefox",
+        Browser::Safari => "safari",
     };
     let dist_dir = crate_dir.join("dist").join(browser_dir);
     let wasm_dist_dir = dist_dir.join("wasm");
@@ -152,6 +153,11 @@ pub fn run(release: bool, browser: Browser) -> Result<()> {
     match browser {
         Browser::Chromium => println!("[oxichrome] Load the dist/chromium/ folder as an unpacked extension in Chrome/Brave."),
         Browser::Firefox => println!("[oxichrome] Load the dist/firefox/ folder as a temporary extension in Firefox (about:debugging)."),
+        Browser::Safari => {
+            println!("[oxichrome] Safari 16.4+ required. Package dist/safari/ with Xcode on macOS:");
+            println!("[oxichrome]   xcrun safari-web-extension-packager dist/safari");
+            println!("[oxichrome] On older Xcode versions, use safari-web-extension-converter instead.");
+        }
     }
 
     Ok(())

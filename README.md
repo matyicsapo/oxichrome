@@ -7,7 +7,7 @@
 
 ![oxichrome](https://raw.githubusercontent.com/0xsouravm/oxichrome/main/assets/og.png)
 
-Write browser extensions entirely in Rust, compiled to WebAssembly. Chrome and Firefox.
+Write browser extensions entirely in Rust, compiled to WebAssembly. Chrome, Firefox, and Safari.
 
 ---
 
@@ -36,6 +36,7 @@ fn Popup() -> impl IntoView {
 ```sh
 cargo oxichrome build                  # Chrome/Edge/Brave
 cargo oxichrome build --target firefox # Firefox
+cargo oxichrome build --target safari  # Safari 16.4+
 ```
 
 ---
@@ -47,7 +48,8 @@ cargo oxichrome build --target firefox # Firefox
 - Leptos for reactive popup and options page UI
 - `cargo oxichrome build` handles everything: compilation, wasm-bindgen, manifest generation, JS/HTML shim generation, static asset copying, optional wasm-opt
 - **`--target firefox`** generates a Firefox-compatible Manifest V3 extension
-- Separate `dist/chromium/` and `dist/firefox/` output directories
+- **`--target safari`** generates a Safari-compatible Manifest V3 web extension
+- Separate `dist/chromium/`, `dist/firefox/`, and `dist/safari/` output directories
 
 Zero JavaScript written by hand.
 
@@ -83,6 +85,49 @@ serde = { version = "1", features = ["derive"] }
 
 **Firefox:** Build with `--target firefox`, then load `dist/firefox/manifest.json` in `about:debugging#/runtime/this-firefox`.
 
+**Safari:** Build with `--target safari`, then follow the packaging steps below.
+
+### Safari web extensions
+
+The Safari target requires **Safari 16.4 or later** (including iOS/iPadOS 16.4 or
+later) because the generated background service worker uses ES modules. It uses
+Manifest V3 and the same WASM-enabled content security policy as Chromium.
+Safari supports the `chrome.*` namespace used by oxichrome, so no API polyfill is
+needed.
+
+Build the extension resources on any supported development platform:
+
+```sh
+cargo oxichrome build --release --target safari
+```
+
+To package them as a Safari extension app, run Apple's tool on macOS with Xcode
+installed:
+
+```sh
+xcrun safari-web-extension-packager dist/safari
+```
+
+On older Xcode versions, the tool is named `safari-web-extension-converter`:
+
+```sh
+xcrun safari-web-extension-converter dist/safari
+```
+
+Review any compatibility warnings, configure signing in the generated Xcode
+project, and build and run the containing app. Enable the extension in Safari's
+extension settings. For unsigned local macOS testing, enable "Allow Unsigned
+Extensions" in Safari's Develop menu. Safari versions that support temporary
+extension-folder installation can also load the generated folder directly; see
+[Apple's running instructions](https://developer.apple.com/documentation/safariservices/running-your-safari-web-extension).
+
+The build command generates web extension resources only; it does not run Xcode,
+sign an app, or submit it to the App Store. Native packaging supports macOS and
+iOS, but API availability and host-permission requirements differ by platform.
+For example, Safari requires host permission for tabs access. Review
+[Apple's compatibility guidance](https://developer.apple.com/documentation/safariservices/assessing-your-safari-web-extension-s-browser-compatibility)
+and test your extension on each intended platform.
+
 ## CLI commands
 
 | Command | Description |
@@ -90,6 +135,7 @@ serde = { version = "1", features = ["derive"] }
 | `cargo oxichrome build` | Build for Chromium (default) |
 | `cargo oxichrome build --release` | Optimized release build |
 | `cargo oxichrome build --target firefox` | Build for Firefox |
+| `cargo oxichrome build --target safari` | Build web extension resources for Safari 16.4+ |
 | `cargo oxichrome clean` | Remove the `dist/` directory |
 | `cargo oxichrome new <name>` | Scaffold a new extension project |
 
@@ -197,8 +243,11 @@ dist/
 │   └── wasm/
 │       ├── crate_name.js
 │       └── crate_name_bg.wasm
-└── firefox/                   # --target firefox
-    ├── manifest.json          # background scripts, gecko ID
+├── firefox/                   # --target firefox
+│   ├── manifest.json          # background scripts, gecko ID
+│   └── ...                    # same files as chromium/
+└── safari/                    # --target safari
+    ├── manifest.json          # module service worker, ready for Safari packaging
     └── ...                    # same files as chromium/
 ```
 

@@ -4,6 +4,18 @@ Source parsing with `syn` and build artifact generation (manifest.json, JS shims
 
 This is an internal crate. You probably want [oxichrome](https://crates.io/crates/oxichrome) or [cargo-oxichrome](https://crates.io/crates/cargo-oxichrome) instead.
 
+## Browser targets
+
+Pass `Browser::Chromium`, `Browser::Firefox`, or `Browser::Safari` to
+`manifest::generate_manifest`. All targets use Manifest V3 and permit WASM via
+`'wasm-unsafe-eval'`. Chromium and Safari use a module background service worker;
+Firefox uses module background scripts and receives a generated Gecko ID.
+
+Safari requires version 16.4 or later for module background support. The CLI
+writes Safari resources to `dist/safari/`; packaging and signing the containing
+app is a separate step using Apple's Xcode tools. See the
+[Safari guide](../README.md#safari-web-extensions).
+
 ## Icons and actions
 
 Configure extension icons and the toolbar action in the extension attribute:

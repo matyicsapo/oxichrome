@@ -8,4 +8,5 @@ pub enum Browser {
     #[default]
     Chromium,
     Firefox,
+    Safari,
 }

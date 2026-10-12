@@ -179,7 +179,7 @@ mod tests {
             fn Popup() {}
         "#;
         let metadata = crate::source_parser::parse_source_str(source).unwrap();
-        for browser in [Browser::Chromium, Browser::Firefox] {
+        for browser in [Browser::Chromium, Browser::Firefox, Browser::Safari] {
             let json = generate_manifest(&metadata, browser).unwrap();
             let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
             let icons = serde_json::json!({
@@ -253,6 +253,33 @@ mod tests {
         assert_eq!(parsed["background"]["service_worker"], "background.js");
         assert_eq!(parsed["action"]["default_popup"], "popup.html");
         assert_eq!(parsed["options_ui"]["page"], "options.html");
+        assert!(parsed.get("browser_specific_settings").is_none());
+    }
+
+    #[test]
+    fn test_generate_manifest_safari() {
+        let metadata = test_metadata();
+        let json = generate_manifest(&metadata, Browser::Safari).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed["manifest_version"], 3);
+        assert_eq!(
+            parsed["background"],
+            serde_json::json!({
+                "service_worker": "background.js",
+                "type": "module"
+            })
+        );
+        assert_eq!(
+            parsed["content_security_policy"]["extension_pages"],
+            "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+        );
+        assert_eq!(parsed["action"]["default_popup"], "popup.html");
+        assert_eq!(parsed["options_ui"]["page"], "options.html");
+        assert_eq!(
+            parsed["web_accessible_resources"][0]["resources"][0],
+            "wasm/*"
+        );
         assert!(parsed.get("browser_specific_settings").is_none());
     }
 
